@@ -49,7 +49,6 @@ DNSGapHunter has been specifically developed for network administrators and blue
   - Multi-threaded architecture for fast processing (configurable thread count)
   - Scalable HTTP requests and retry mechanism
   - Intelligent DNS resolution and error handling
-  - Special rate limiting control for URLScan API
   - IP validation and verification mechanisms
   - Comprehensive status monitoring and progress indicators
 
