@@ -64,7 +64,7 @@ DNSGapHunter has been specifically developed for network administrators and blue
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/DNSGapHunter.git
+git clone https://github.com/0xhav0c/DNSGapHunter.git
 cd DNSGapHunter
 
 # Install dependencies
