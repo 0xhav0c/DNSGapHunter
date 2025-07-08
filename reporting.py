@@ -296,7 +296,7 @@ def generate_html_report(results, no_dns_records, security_bypassed_count, secur
     </head>
     <body data-theme="dark">
         <div class="theme-switch">
-            <button onclick="toggleTheme()">🌙</button>
+            <button onclick="toggleTheme()">DARK</button>
         </div>
         
         <div class="container">
@@ -549,7 +549,7 @@ def generate_html_report(results, no_dns_records, security_bypassed_count, secur
                 body.setAttribute('data-theme', newTheme);
                 
                 const button = document.querySelector('.theme-switch button');
-                button.textContent = newTheme === 'dark' ? '🌙' : '☀️';
+                button.textContent = newTheme === 'dark' ? 'DARK' : 'LIGHT';
                 
                 const textColor = newTheme === 'dark' ? '#ffffff' : '#2c3e50';
                 const gridColor = newTheme === 'dark' ? '#404040' : '#e0e0e0';
@@ -576,7 +576,7 @@ def generate_html_report(results, no_dns_records, security_bypassed_count, secur
     </html>
     """
     
-    with open(f'{report_dir}/report_{timestamp}.html', 'w') as f:
+    with open(f'{report_dir}/report_{timestamp}.html', 'w', encoding='utf-8') as f:
         f.write(html_content)
         
     return f'{report_dir}/report_{timestamp}.html' 
