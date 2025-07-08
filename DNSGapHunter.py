@@ -58,7 +58,7 @@ class DNSGapHunter:
                 # Save successful results
                 if self.results:
                     output_file = f'dnsfw_results_{timestamp}.csv'
-                    with open(output_file, 'w', newline='') as csvfile:
+                    with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
                         fieldnames = ['Domain', 'Status', 'Security Status', 'IP', 'Sources']
                         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                         writer.writeheader()
@@ -76,7 +76,7 @@ class DNSGapHunter:
                 # Save results with no DNS records
                 if self.no_dns_records:
                     no_dns_file = f'dnsfw_no_records_{timestamp}.csv'
-                    with open(no_dns_file, 'w', newline='') as csvfile:
+                    with open(no_dns_file, 'w', newline='', encoding='utf-8') as csvfile:
                         fieldnames = ['Domain', 'Status', 'Security Status', 'IP', 'Sources']
                         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                         writer.writeheader()
@@ -245,7 +245,7 @@ class DNSGapHunter:
         os.makedirs(results_dir, exist_ok=True)
         
         output_file = f'{results_dir}/dnsfw_results_{timestamp}.csv'
-        with open(output_file, 'w', newline='') as csvfile:
+        with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
             fieldnames = ['Domain', 'Status', 'Security Status', 'IP', 'Sources']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
@@ -260,7 +260,7 @@ class DNSGapHunter:
                 })
         
         no_dns_file = f'{results_dir}/dnsfw_no_records_{timestamp}.csv'
-        with open(no_dns_file, 'w', newline='') as csvfile:
+        with open(no_dns_file, 'w', newline='', encoding='utf-8') as csvfile:
             fieldnames = ['Domain', 'Status', 'Security Status', 'IP', 'Sources']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
@@ -312,6 +312,38 @@ class DNSGapHunter:
         
         title = ' ANALYSIS COMPLETED '
         print(f"\n{'█' * ((self.terminal_width - len(title)) // 2)}{title}{'█' * ((self.terminal_width - len(title)) // 2)}\n")
+
+def save_filtered_domains(filtered_domains: Dict[str, List[str]], timestamp: str) -> str:
+    """
+    Saves filtered domains and their reasons to a CSV file.
+    
+    Args:
+        filtered_domains (Dict[str, List[str]]): Dictionary of filtered domains and their sources
+        timestamp (str): Timestamp for the filename
+        
+    Returns:
+        str: Path to the created CSV file
+    """
+    results_dir = "test-results/filtered-domains"
+    os.makedirs(results_dir, exist_ok=True)
+    
+    output_file = f'{results_dir}/filtered_domains_{timestamp}.csv'
+    
+    with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
+        fieldnames = ['Domain', 'Filter Reason', 'Sources', 'Timestamp']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        
+        for domain, sources in filtered_domains.items():
+            filter_reason = get_filter_reason(domain)
+            writer.writerow({
+                'Domain': domain,
+                'Filter Reason': filter_reason,
+                'Sources': ', '.join(sources),
+                'Timestamp': timestamp
+            })
+    
+    return output_file
 
 def main():
     # Suppress SSL warnings
