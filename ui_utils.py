@@ -1,11 +1,5 @@
 import os
-import signal
-import csv
-import logging
-import time
-import datetime
-from colorama import Fore, Style, init
-from typing import Dict, List, Optional, Any
+from colorama import Fore, Style
 
 def show_banner():
     """

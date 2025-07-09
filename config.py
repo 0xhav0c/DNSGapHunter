@@ -17,11 +17,6 @@ HTTP_MAX_RETRIES = 5
 HTTP_BACKOFF_FACTOR = 2
 HTTP_RETRY_CODES = [429, 500, 502, 503, 504]
 
-# URLScan API settings
-URLSCAN_TIMEOUT = 60  # Seconds for URLScan requests
-URLSCAN_RETRY_DELAY = 10  # Seconds between retries
-URLSCAN_MAX_RETRIES = 3  # Maximum number of retry attempts
-
 # Thread pool settings
 # Default is 2x CPU cores, but no more than 16 threads
 import os

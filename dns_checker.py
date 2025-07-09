@@ -26,105 +26,78 @@ def check_dns(domain: str, security_ips: List[str], test_type: str = "dnsfw") ->
     else:
         query_domain = domain
         domain = domain[:-1]
-    
-    try:
-        resolver = dns.resolver.Resolver()
-        resolver.timeout = DNS_TIMEOUT
-        resolver.lifetime = DNS_TIMEOUT
         
-        if test_type == "dnsfw":
+    # Initialize resolver with timeout
+    resolver = dns.resolver.Resolver()
+    resolver.timeout = DNS_TIMEOUT
+    resolver.lifetime = DNS_TIMEOUT
+    
+    # Try to resolve domain
+    resolved_ip = None
+    status = "valid"
+    security_status = "DNSFW Bypassed" if test_type == "dnsfw" else "Sinkhole Bypassed"
+    
+    for attempt in range(DNS_RETRY_COUNT + 1):
+        try:
+            # Try A record first
             answers = resolver.resolve(query_domain, 'A')
-            security_status = 'DNSFW Bypassed'
-            resolved_address = None
-            valid_ip_found = False
             
+            # Get first IP from answers
             for answer in answers:
-                ip = answer.address
-                if ip in SINKHOLE_IPS:
+                resolved_ip = answer.address
+                
+                # Check if resolved IP is a terminated domain IP
+                if resolved_ip in ['0.0.0.0', '127.0.0.1', '1.1.1.1', '1.0.0.1', '8.8.8.8', '8.8.4.4']:
                     status = 'valid'
                     security_status = 'Post-Attack Terminated Domain'
-                    resolved_address = ip
-                    return domain, status, security_status, resolved_address
-            
-            for answer in answers:
-                ip = answer.address
-                if is_valid_ip(ip):
-                    valid_ip_found = True
-                    if ip in security_ips:
-                        security_status = 'DNSFW Blocked'
-                    resolved_address = ip
-                    break
-            
-            if not valid_ip_found:
-                status = 'invalid_ip'
-                security_status = 'Invalid IP Detected'
-                resolved_address = None
-            else:
-                status = 'valid'
+                    return domain, status, security_status, resolved_ip
                 
-        elif test_type == "sinkhole":
+                # Check if resolved IP is in security IPs
+                if test_type == "dnsfw":
+                    if resolved_ip in security_ips:
+                        security_status = "DNSFW Blocked"
+                else:  # sinkhole
+                    if resolved_ip in SINKHOLE_IPS:
+                        security_status = "Sinkhole Address Blocked"
+                break
+                
+            break  # If we get here, resolution succeeded
+            
+        except dns.resolver.NXDOMAIN:
+            status = "no_dns_record"
+            security_status = "No DNS Record"
+            break
+        except dns.resolver.NoAnswer:
+            # Try CNAME if A record fails
             try:
-                answers = resolver.resolve(query_domain, 'CNAME')
-                security_status = 'Sinkhole Bypassed'
-                resolved_address = None
-                
-                for answer in answers:
-                    cname = str(answer.target).rstrip('.')
-                    if cname in security_ips:
-                        security_status = 'Sinkhole Address Blocked'
-                        resolved_address = cname
-                        break
-                
-                status = 'valid'
-                
-            except dns.resolver.NoAnswer:
-                answers = resolver.resolve(query_domain, 'A')
-                security_status = 'Sinkhole Bypassed'
-                resolved_address = None
-                
-                for answer in answers:
-                    ip = answer.address
-                    if ip in SINKHOLE_IPS:
-                        status = 'valid'
-                        security_status = 'Post-Attack Terminated Domain'
-                        resolved_address = ip
-                        return domain, status, security_status, resolved_address
-                
-                for answer in answers:
-                    ip = answer.address
-                    if is_valid_ip(ip):
-                        resolved_address = ip
-                        break
-                
-                status = 'valid'
-                
-    except dns.resolver.NoAnswer:
-        status = 'no_dns_record'
-        security_status = 'No DNS Record Available'
-        resolved_address = None
-        logging.debug(f"No DNS record for {original_domain}")
-    except dns.resolver.NXDOMAIN:
-        status = 'no_dns_record'
-        security_status = 'No DNS Record Available'
-        resolved_address = None
-        logging.debug(f"NXDOMAIN for {original_domain}")
-    except dns.resolver.NoNameservers:
-        status = 'no_nameserver'
-        security_status = 'No Nameserver Available'
-        resolved_address = None
-        logging.debug(f"No nameservers for {original_domain}")
-    except dns.resolver.Timeout:
-        status = 'timeout'
-        security_status = 'DNS Query Timeout'
-        resolved_address = None
-        logging.debug(f"DNS query timeout for {original_domain}")
-    except Exception as e:
-        status = 'error'
-        security_status = f'Unexpected Error: {str(e)}'
-        resolved_address = None
-        logging.debug(f"DNS query error for {original_domain}: {str(e)}")
-
-    return domain, status, security_status, resolved_address
+                cname_answers = resolver.resolve(query_domain, 'CNAME')
+                resolved_ip = str(cname_answers[0].target).rstrip('.')
+                break
+            except:
+                status = "no_dns_record"
+                security_status = "No DNS Record"
+                break
+        except dns.resolver.NoNameservers:
+            if attempt < DNS_RETRY_COUNT:
+                continue
+            status = "no_nameserver"
+            security_status = "No DNS Record"
+            break
+        except dns.resolver.Timeout:
+            if attempt < DNS_RETRY_COUNT:
+                continue
+            status = "timeout"
+            security_status = "No DNS Record"
+            break
+        except Exception as e:
+            if attempt < DNS_RETRY_COUNT:
+                continue
+            logging.error(f"Unexpected error resolving {domain}: {str(e)}")
+            status = "error"
+            security_status = "Error"
+            break
+            
+    return domain, status, security_status, resolved_ip
 
 def get_security_configuration() -> Tuple[List[str], str]:
     """
@@ -133,155 +106,103 @@ def get_security_configuration() -> Tuple[List[str], str]:
     Returns:
         Tuple[List[str], str]: List of security IPs/domains and test type
     """
-    print(f"\n{Fore.CYAN}Security Test Selection:{Style.RESET_ALL}")
-    print(f"{Fore.YELLOW}1.{Style.RESET_ALL} DNS Firewall Test (Infoblox Threat Defense IP List)")
-    print(f"{Fore.YELLOW}2.{Style.RESET_ALL} DNS Firewall Test (Manual IP Entry)")
-    print(f"{Fore.YELLOW}3.{Style.RESET_ALL} DNS Firewall Test (IP List File)")
-    print(f"{Fore.YELLOW}4.{Style.RESET_ALL} Sinkhole DNS Security Test (Sinkhole Domain List)")
-    
     while True:
-        try:
-            choice = input(f"\n{Fore.YELLOW}Select Option (1-4):{Style.RESET_ALL} ").strip()
+        print("\nSelect security configuration type:")
+        print("1. DNS Firewall (Infoblox Threat Defense)")
+        print("2. DNS Firewall (Manual IP entry)")
+        print("3. DNS Firewall (IP list file)")
+        print("4. Sinkhole DNS Security")
+        
+        choice = input("\nEnter choice (1-4): ").strip()
+        
+        if choice not in ["1", "2", "3", "4"]:
+            print(f"{Fore.RED}Invalid choice. Please enter 1-4.{Style.RESET_ALL}")
+            continue
             
-            if choice in ["1", "2", "3"]:
-                if choice == "1":
-                    try:
-                        url = "https://infoblox-whitelist.s3.amazonaws.com/infoblox-ip-whitelist.json"
-                        response = requests.get(url, timeout=10)
-                        response.raise_for_status()
-                        
-                        data = response.json()
-                        security_ips = data.get("IP", [])
-                        security_ips.extend(data.get("IPv6", []))
-                        
-                        if not security_ips:
-                            print(f"Empty DNSFW IP list received. Please try another option.")
-                            continue
-                            
-                        color = Fore.GREEN if len(security_ips) > 0 else Fore.RED
-                        print(f"Successfully retrieved DNSFW IP list. Total {color}{len(security_ips)}{Style.RESET_ALL} IPs.")
-                        return security_ips, "dnsfw"
-                        
-                    except requests.exceptions.RequestException as e:
-                        print(f"{Fore.RED}Error: Failed to fetch IP list. Please try another option.{Style.RESET_ALL}")
-                        continue
-                        
-                elif choice == "2":
-                    ip_input = input(f"\n{Fore.YELLOW}Enter IP addresses (comma-separated):{Style.RESET_ALL} ").strip()
-                    ip_list = [ip.strip() for ip in ip_input.split(',')]
-                    
-                    valid_ips = []
-                    for ip in ip_list:
-                        if is_valid_ip(ip):
-                            valid_ips.append(ip)
-                        else:
-                            print(f"{Fore.RED}Invalid IP address: {ip}{Style.RESET_ALL}")
-                    
-                    if not valid_ips:
-                        print(f"{Fore.RED}No valid IP addresses found. Please try again.{Style.RESET_ALL}")
-                        continue
-                        
-                    print(f"{Fore.GREEN}Validated {len(valid_ips)} IP addresses.{Style.RESET_ALL}")
-                    return valid_ips, "dnsfw"
-                    
-                elif choice == "3":
-                    file_path = input(f"\n{Fore.YELLOW}Enter IP list file path (.txt):{Style.RESET_ALL} ").strip()
-                    
-                    try:
-                        with open(file_path, 'r') as file:
-                            ip_list = [line.strip() for line in file if line.strip()]
-                        
-                        valid_ips = []
-                        for ip in ip_list:
-                            if is_valid_ip(ip):
-                                valid_ips.append(ip)
-                            else:
-                                print(f"{Fore.RED}Invalid IP address: {ip}{Style.RESET_ALL}")
-                        
-                        if not valid_ips:
-                            print(f"{Fore.RED}No valid IP addresses found. Please try again.{Style.RESET_ALL}")
-                            continue
-                            
-                        print(f"{Fore.GREEN}Validated {len(valid_ips)} IP addresses.{Style.RESET_ALL}")
-                        return valid_ips, "dnsfw"
-                        
-                    except FileNotFoundError:
-                        print(f"{Fore.RED}File not found: {file_path}{Style.RESET_ALL}")
-                        continue
-                    except Exception as e:
-                        print(f"{Fore.RED}File reading error: {str(e)}{Style.RESET_ALL}")
-                        continue
-                        
-            elif choice == "4":
-                print(f"\n{Fore.CYAN}Select Sinkhole Domain for Sinkhole DNS Security Test:{Style.RESET_ALL}")
-                print(f"{Fore.YELLOW}1.{Style.RESET_ALL} Palo Alto Networks Sinkhole")
-                print(f"{Fore.YELLOW}2.{Style.RESET_ALL} Cisco Umbrella Sinkhole")
-                print(f"{Fore.YELLOW}3.{Style.RESET_ALL} Fortinet Sinkhole")
-                print(f"{Fore.YELLOW}4.{Style.RESET_ALL} Custom Sinkhole Domain")
+        if choice == "1":
+            try:
+                url = "https://infoblox-whitelist.s3.amazonaws.com/infoblox-ip-whitelist.json"
+                response = requests.get(url, timeout=10)
+                response.raise_for_status()
                 
-                sinkhole_choice = input(f"\n{Fore.YELLOW}Select Option (1-4):{Style.RESET_ALL} ").strip()
+                data = response.json()
+                security_ips = data.get("IP", [])
+                security_ips.extend(data.get("IPv6", []))
                 
-                if sinkhole_choice == "1":
-                    return ["sinkhole.paloaltonetworks.com"], "sinkhole"
-                elif sinkhole_choice == "2":
-                    return ["sinkhole.umbrella.com"], "sinkhole"
-                elif sinkhole_choice == "3":
-                    return ["sinkhole.fortinet.com"], "sinkhole"
-                elif sinkhole_choice == "4":
-                    custom_domain = input(f"\n{Fore.YELLOW}Enter custom sinkhole domain:{Style.RESET_ALL} ").strip()
-                    return [custom_domain], "sinkhole"
-                else:
-                    print(f"{Fore.RED}Invalid selection. Please enter 1-4.{Style.RESET_ALL}")
+                if not security_ips:
+                    print(f"Empty DNSFW IP list received. Please try another option.")
                     continue
                     
-            else:
-                print(f"{Fore.RED}Invalid selection. Please enter 1-4.{Style.RESET_ALL}")
+                color = Fore.GREEN if len(security_ips) > 0 else Fore.RED
+                print(f"Successfully retrieved DNSFW IP list. Total {color}{len(security_ips)}{Style.RESET_ALL} IPs.")
+                return security_ips, "dnsfw"
+                
+            except requests.exceptions.RequestException as e:
+                print(f"{Fore.RED}Error: Failed to fetch IP list. Please try another option.{Style.RESET_ALL}")
                 continue
                 
-        except Exception as e:
-            print(f"{Fore.RED}Unexpected error: {str(e)}{Style.RESET_ALL}")
-            continue
-
-def resolve_domain(domain: str, record_type: str = 'A', timeout: int = DNS_TIMEOUT) -> List[str]:
-    """
-    General purpose domain resolution function. Performs DNS query for the specified record type.
-    
-    Args:
-        domain (str): Domain to resolve
-        record_type (str): DNS record type (A, AAAA, MX, TXT, NS, etc.)
-        timeout (int): DNS query timeout in seconds (from config)
-        
-    Returns:
-        List[str]: List of resolved records
-    """
-    try:
-        resolver = dns.resolver.Resolver()
-        resolver.timeout = timeout
-        resolver.lifetime = timeout
-        
-        answers = resolver.resolve(domain, record_type)
-        
-        results = []
-        for answer in answers:
-            if record_type == 'A' or record_type == 'AAAA':
-                results.append(answer.address)
-            elif record_type == 'MX':
-                results.append(f"{answer.preference} {answer.exchange}")
-            elif record_type == 'CNAME':
-                results.append(str(answer.target).rstrip('.'))
-            elif record_type == 'NS':
-                results.append(str(answer.target).rstrip('.'))
-            elif record_type == 'TXT':
-                results.append(str(answer).strip('"'))
-            else:
-                results.append(str(answer))
-        
-        return results
-    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
-        return []
-    except dns.resolver.Timeout:
-        logging.warning(f"DNS timeout resolving {domain} ({record_type})")
-        return []
-    except Exception as e:
-        logging.error(f"Error resolving {domain} ({record_type}): {e}")
-        return [] 
+        elif choice == "2":
+            print("\nEnter DNS Firewall IP addresses (one per line, empty line to finish):")
+            security_ips = []
+            
+            while True:
+                ip = input().strip()
+                if not ip:
+                    break
+                    
+                if is_valid_ip(ip):
+                    security_ips.append(ip)
+                else:
+                    print(f"{Fore.RED}Invalid IP address: {ip}{Style.RESET_ALL}")
+                    
+            if not security_ips:
+                print(f"{Fore.RED}No valid IPs entered. Please try again.{Style.RESET_ALL}")
+                continue
+                
+            print(f"\nConfigured {Fore.GREEN}{len(security_ips)}{Style.RESET_ALL} DNS Firewall IPs")
+            return security_ips, "dnsfw"
+            
+        elif choice == "3":
+            file_path = input("\nEnter path to IP list file: ").strip()
+            
+            try:
+                with open(file_path, 'r') as f:
+                    security_ips = []
+                    for line in f:
+                        ip = line.strip()
+                        if ip and not ip.startswith('#') and is_valid_ip(ip):
+                            security_ips.append(ip)
+                            
+                if not security_ips:
+                    print(f"{Fore.RED}No valid IPs found in file. Please try again.{Style.RESET_ALL}")
+                    continue
+                    
+                print(f"\nLoaded {Fore.GREEN}{len(security_ips)}{Style.RESET_ALL} DNS Firewall IPs from file")
+                return security_ips, "dnsfw"
+                
+            except Exception as e:
+                print(f"{Fore.RED}Error reading file: {str(e)}{Style.RESET_ALL}")
+                continue
+                
+        else:  # choice == "4"
+            print("\nSelect sinkhole configuration:")
+            print("1. Palo Alto Networks (default: sinkhole.paloaltonetworks.com)")
+            print("2. Cisco Umbrella (default: hit-nxdomain.opendns.com)")
+            print("3. Fortinet (default: block.fortinet.com)")
+            print("4. Custom sinkhole domain")
+            
+            sinkhole_choice = input("\nEnter choice (1-4): ").strip()
+            
+            if sinkhole_choice == "1":
+                return ["sinkhole.paloaltonetworks.com"], "sinkhole"
+            elif sinkhole_choice == "2":
+                return ["hit-nxdomain.opendns.com"], "sinkhole"
+            elif sinkhole_choice == "3":
+                return ["block.fortinet.com"], "sinkhole"
+            elif sinkhole_choice == "4":
+                domain = input("\nEnter custom sinkhole domain: ").strip()
+                if domain:
+                    return [domain], "sinkhole"
+            
+            print(f"{Fore.RED}Invalid choice. Please try again.{Style.RESET_ALL}")
+            continue 

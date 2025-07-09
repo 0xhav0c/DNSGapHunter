@@ -36,18 +36,18 @@ def is_valid_ip(ip: str) -> bool:
             
     return False
 
-def is_ip_address(domain: str) -> bool:
+def is_ip_address(text: str) -> bool:
     """
-    Check if a domain is actually an IP address.
+    Check if text is an IP address.
     
     Args:
-        domain (str): Domain to check
+        text (str): Text to check
         
     Returns:
-        bool: True if domain is an IP address, False otherwise
+        bool: True if text is an IP address, False otherwise
     """
     try:
-        ipaddress.ip_address(domain)
+        ipaddress.ip_address(text)
         return True
     except ValueError:
         return False
@@ -62,6 +62,9 @@ def clean_domain(domain: str) -> str:
     Returns:
         str: Cleaned domain
     """
+    # Convert to string if not already
+    domain = str(domain).strip()
+    
     # Clean domain by removing comments if any
     if '#' in domain:
         domain = domain.split('#')[0].strip()
@@ -70,11 +73,17 @@ def clean_domain(domain: str) -> str:
     if '/' in domain:
         domain = domain.split('/')[0].strip()
     
-    # Handle other common patterns
+    # Handle hostfile format patterns
     if domain.startswith('0.0.0.0 '):
-        domain = domain.replace('0.0.0.0 ', '').strip()
+        domain = domain.split('0.0.0.0')[-1].strip()
     elif domain.startswith('127.0.0.1 '):
-        domain = domain.replace('127.0.0.1 ', '').strip()
+        domain = domain.split('127.0.0.1')[-1].strip()
+    elif domain.startswith('::1 '):
+        domain = domain.split('::1')[-1].strip()
+    
+    # Handle tab separators that might appear in hostfiles
+    if '\t' in domain:
+        domain = domain.split('\t')[-1].strip()
     
     # Remove trailing dot (representing root domain in DNS notation)
     if domain.endswith('.'):
@@ -84,80 +93,14 @@ def clean_domain(domain: str) -> str:
     if domain.endswith('\\'):
         domain = domain[:-1]
         
-    return domain
-
-def is_valid_domain_format(domain: str) -> bool:
-    """
-    Validates domain string format against RFC standards.
-    Accepts special characters like '/', '*', '_' that can be valid in DNS records.
-    Removes any comments or path information before validation.
+    # Convert to lowercase
+    domain = domain.lower()
     
-    Args:
-        domain (str): Domain to validate
-        
-    Returns:
-        bool: True if domain format is valid, False otherwise
-    """
-    try:
-        original_domain = domain
-        domain = clean_domain(domain)
-        
-        # Log the cleaning transformation for debugging
-        if original_domain != domain:
-            logging.debug(f"Domain cleaned: '{original_domain}' -> '{domain}'")
-            
-        # Domain must contain at least one dot
-        if '.' not in domain:
-            logging.debug(f"Domain rejected - no dot: '{domain}'")
-            return False
-        
-        # Reject email addresses
-        if '@' in domain:
-            logging.debug(f"Domain rejected - contains @ symbol: '{domain}'")
-            return False
-            
-        # Domain parts check
-        parts = domain.split('.')
-        if len(parts) < 2:
-            logging.debug(f"Domain rejected - less than 2 parts: '{domain}'")
-            return False
-            
-        # Each part must contain at least one character
-        if any(len(part) == 0 for part in parts):
-            logging.debug(f"Domain rejected - contains empty part: '{domain}'")
-            return False
-        
-        # Check for invalid characters in each part
-        for part in parts:
-            # Reject empty parts
-            if not part:
-                logging.debug(f"Domain rejected - empty part in: '{domain}'")
-                return False
-                
-            # Check for incorrect use of punctuation
-            if '..' in domain:
-                logging.debug(f"Domain rejected - double dots in: '{domain}'")
-                return False
-                
-            # Subdomains should not start or end with -
-            if part.startswith('-') or part.endswith('-'):
-                logging.debug(f"Domain rejected - part starts or ends with dash: '{part}' in '{domain}'")
-                return False
-            
-            # Accept only valid characters for DNS:
-            # a-z, 0-9, -, *, _ (for wildcard and service records)
-            if not re.match(r'^[a-zA-Z0-9\-\*\_]+$', part):
-                logging.debug(f"Domain rejected - invalid characters in part: '{part}' in '{domain}'")
-                return False
-            
-        return True
-    except Exception as e:
-        logging.debug(f"Domain validation exception: '{domain}' - {str(e)}")
-        return False
+    return domain
 
 def is_whitelisted_domain(domain: str) -> bool:
     """
-    Check if a domain is in the whitelist.
+    Check if domain is in whitelist.
     
     Args:
         domain (str): Domain to check
@@ -165,10 +108,15 @@ def is_whitelisted_domain(domain: str) -> bool:
     Returns:
         bool: True if domain is whitelisted, False otherwise
     """
-    for white_domain in WHITELISTED_DOMAINS:
-        if domain == white_domain or domain.endswith(f".{white_domain}"):
+    # Direct match
+    if domain in WHITELISTED_DOMAINS:
+        return True
+        
+    # Check if domain is a subdomain of any whitelisted domain
+    for whitelisted in WHITELISTED_DOMAINS:
+        if domain.endswith('.' + whitelisted):
             return True
-    
+            
     return False
 
 def is_valid_domain(domain: str) -> bool:
@@ -206,9 +154,47 @@ def is_valid_domain(domain: str) -> bool:
                 logging.debug(f"Domain rejected - is IP:port format: {original_domain}")
                 return False
         
-        # Domain format validation
-        if not is_valid_domain_format(domain):
-            logging.debug(f"Domain rejected - invalid format: {original_domain}")
+        # Domain must contain at least one dot
+        if '.' not in domain:
+            logging.debug(f"Domain rejected - no dot: {original_domain}")
+            return False
+            
+        # Domain parts check
+        parts = domain.split('.')
+        if len(parts) < 2:
+            logging.debug(f"Domain rejected - less than 2 parts: {original_domain}")
+            return False
+            
+        # Each part must contain at least one character
+        if any(len(part) == 0 for part in parts):
+            logging.debug(f"Domain rejected - contains empty part: {original_domain}")
+            return False
+            
+        # Check for double dots
+        if '..' in domain:
+            logging.debug(f"Domain rejected - contains double dots: {original_domain}")
+            return False
+            
+        # Check each part for valid characters and length
+        for part in parts:
+            # Sections starting or ending with - are invalid
+            if part.startswith('-') or part.endswith('-'):
+                logging.debug(f"Domain rejected - part starts/ends with hyphen: {original_domain}")
+                return False
+                
+            # Character check for each part
+            if not re.match(r'^[a-zA-Z0-9\-\*\_]+$', part):
+                logging.debug(f"Domain rejected - contains invalid characters: {original_domain}")
+                return False
+                
+            # Length check for each part
+            if len(part) > 63:
+                logging.debug(f"Domain rejected - part too long: {original_domain}")
+                return False
+                
+        # Total length check
+        if len(domain) > 253:
+            logging.debug(f"Domain rejected - total length too long: {original_domain}")
             return False
             
         # Whitelist check
@@ -274,85 +260,45 @@ def get_filter_reason(domain: str) -> str:
     """
     if not domain:
         return "EMPTY_DOMAIN"
-    
+        
+    if '@' in domain:
+        return "CONTAINS_AT_SYMBOL"
+        
     if is_ip_address(domain):
-        return "IP_ADDRESS"
-    
-    if not "." in domain:
-        return "INVALID_DOMAIN_FORMAT"
-    
-    if domain in ["example.com", "example.org", "example.net"]:
-        return "EXAMPLE_DOMAIN"
+        return "IS_IP_ADDRESS"
+        
+    if ':' in domain:
+        ip_part = domain.split(':')[0]
+        if is_valid_ip(ip_part):
+            return "IS_IP_PORT_FORMAT"
+            
+    if '.' not in domain:
+        return "NO_DOT"
+        
+    parts = domain.split('.')
+    if len(parts) < 2:
+        return "LESS_THAN_2_PARTS"
+        
+    if any(len(part) == 0 for part in parts):
+        return "EMPTY_PART"
+        
+    if '..' in domain:
+        return "DOUBLE_DOTS"
+        
+    for part in parts:
+        if part.startswith('-') or part.endswith('-'):
+            return "STARTS_ENDS_WITH_HYPHEN"
+            
+        if not re.match(r'^[a-zA-Z0-9\-\*\_]+$', part):
+            return "INVALID_CHARACTERS"
+            
+        if len(part) > 63:
+            return "PART_TOO_LONG"
+            
+    if len(domain) > 253:
+        return "TOTAL_LENGTH_TOO_LONG"
         
     if is_whitelisted_domain(domain):
-        return "WHITELISTED_DOMAIN"
+        return "WHITELISTED"
         
-    if len(domain) > 253:
-        return "DOMAIN_TOO_LONG"
-    
-    # Check domain parts
-    parts = domain.split('.')
-    
-    for part in parts:
-        # Sections starting or ending with - are invalid
-        if part.startswith('-') or part.endswith('-'):
-            return "INVALID_DOMAIN_FORMAT"
-        
-        # Character check for each part
-        if not re.match(r'^[a-zA-Z0-9\-\*\_]+$', part):
-            return "SPECIAL_DNS_RECORD"
-    
-    # Check for double dots
-    if '..' in domain:
-        return "INVALID_DOMAIN_FORMAT"
-        
-    return "VALID"
-
-def debug_domain_validation(domain: str) -> Dict[str, bool]:
-    """
-    Debug function to trace domain validation steps.
-    
-    Args:
-        domain (str): Domain to validate
-        
-    Returns:
-        Dict[str, bool]: Dictionary with validation step results
-    """
-    results = {
-        "original": domain,
-        "cleaned": clean_domain(domain),
-        "is_ip_address": False,
-        "is_ip_port": False,
-        "valid_format": False,
-        "whitelisted": False,
-        "final_result": False
-    }
-    
-    # Clean the domain
-    cleaned_domain = clean_domain(domain)
-    results["cleaned"] = cleaned_domain
-    
-    # Check if it's an IP address
-    results["is_ip_address"] = is_ip_address(cleaned_domain)
-    
-    # Check if it's IP:Port format
-    if ':' in cleaned_domain:
-        ip_part = cleaned_domain.split(':')[0]
-        try:
-            results["is_ip_port"] = is_valid_ip(ip_part)
-        except:
-            results["is_ip_port"] = False
-    
-    # Check domain format
-    results["valid_format"] = is_valid_domain_format(cleaned_domain)
-    
-    # Check whitelist
-    results["whitelisted"] = is_whitelisted_domain(cleaned_domain)
-    
-    # Final result
-    results["final_result"] = (not results["is_ip_address"] and 
-                              not results["is_ip_port"] and 
-                              results["valid_format"] and 
-                              not results["whitelisted"])
-    
-    return results 
+    return "VALID" 

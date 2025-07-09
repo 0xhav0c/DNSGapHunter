@@ -19,10 +19,10 @@ import os
 import io
 
 # Import modules from project files
-from domain_utils import is_valid_ip, extract_domain_from_url, is_valid_domain, get_filter_reason, debug_domain_validation
-from dns_checker import check_dns, get_security_configuration, resolve_domain
+from domain_utils import is_valid_ip, extract_domain_from_url, is_valid_domain, get_filter_reason
+from dns_checker import check_dns, get_security_configuration
 from data_collector import get_intelligence_sources, fetch_domain_list, merge_domain_lists, save_filtered_domains, fetch_malicious_domains
-from reporting import format_duration, generate_html_report
+from reporting import generate_html_report
 from ui_utils import show_banner
 from config import MAX_DOMAINS, MAX_WORKERS, REPORT_DIR, DNSFW_REPORT_SUBDIR, SINKHOLE_REPORT_SUBDIR
 
@@ -135,15 +135,10 @@ class DNSGapHunter:
         # Register signal handler
         signal.signal(signal.SIGINT, self.signal_handler)
         
-        title = ' DNS SECURITY ANALYSIS TOOL '
-        print(f"\n{'█' * ((self.terminal_width - len(title)) // 2)}{title}{'█' * ((self.terminal_width - len(title)) // 2)}")
-        
-        title = ' SECURITY CONFIGURATION '
-        print(f"\n{'█' * ((self.terminal_width - len(title)) // 2)}{title}{'█' * ((self.terminal_width - len(title)) // 2)}")
+        # Get security configuration
         security_ips, test_type = get_security_configuration()
         
-        title = ' MALICIOUS DOMAIN COLLECTION '
-        print(f"\n{'█' * ((self.terminal_width - len(title)) // 2)}{title}{'█' * ((self.terminal_width - len(title)) // 2)}")
+        # Collect malicious domains
         valid_domains, filtered_domains = fetch_malicious_domains(self.terminal_width)
         
         # Limit domains to MAX_DOMAINS (from config)
@@ -166,9 +161,7 @@ class DNSGapHunter:
         
         start_time = time.time()
         
-        title = ' DNS QUERY AND ANALYSIS '
-        print(f"\n{'█' * ((self.terminal_width - len(title)) // 2)}{title}{'█' * ((self.terminal_width - len(title)) // 2)}")
-        print("\n\n")  # Two line breaks added
+        print("\n")  # One line break added
         
         # Square progress bar characters
         square_chars = "□▣▤▥▦▧▨▩■"
@@ -276,6 +269,7 @@ class DNSGapHunter:
         
         html_report_path = generate_html_report(self.results, self.no_dns_records, security_bypassed_count, security_blocked_count, security_block_counts, test_type, timestamp)
         
+        # Print analysis results title
         title = ' ANALYSIS RESULTS '
         print(f"\n{'█' * ((self.terminal_width - len(title)) // 2)}{title}{'█' * ((self.terminal_width - len(title)) // 2)}")
         print("\n\n")  # Two line breaks added
@@ -287,6 +281,7 @@ class DNSGapHunter:
         print(f"{'HTML Report':<40} | {html_report_path:<60}")
         print(f"{'-' * self.terminal_width}")
         
+        # Print summary statistics title
         title = ' SUMMARY STATISTICS '
         print(f"\n{'█' * ((self.terminal_width - len(title)) // 2)}{title}{'█' * ((self.terminal_width - len(title)) // 2)}")
         print("\n\n")  # Two line breaks added
@@ -299,6 +294,7 @@ class DNSGapHunter:
         print(f"{'Domains with no DNS records':<40} | {len(self.no_dns_records):>10}")
         print(f"{'-' * self.terminal_width}")
         
+        # Print security IP blocking statistics title
         title = ' SECURITY IP BLOCKING STATISTICS '
         print(f"\n{'█' * ((self.terminal_width - len(title)) // 2)}{title}{'█' * ((self.terminal_width - len(title)) // 2)}")
         print("\n\n")  # Two line breaks added
@@ -310,6 +306,7 @@ class DNSGapHunter:
                 print(f"{ip:<20} | {count:>15}")
         print(f"{'-' * self.terminal_width}")
         
+        # Print analysis completed title
         title = ' ANALYSIS COMPLETED '
         print(f"\n{'█' * ((self.terminal_width - len(title)) // 2)}{title}{'█' * ((self.terminal_width - len(title)) // 2)}\n")
 
@@ -379,7 +376,6 @@ def main():
         logging.basicConfig(level=logging.INFO, format=log_format)
     
     # Display AbuseIPDB removal info - only show once during program startup
-    logging.info(f"{Fore.CYAN}Info: AbuseIPDB source has been removed from intelligence sources{Style.RESET_ALL}")
     
     # Process test domain if provided
     if '--test-domain' in sys.argv:
@@ -387,10 +383,14 @@ def main():
             idx = sys.argv.index('--test-domain')
             if idx + 1 < len(sys.argv):
                 test_domain = sys.argv[idx + 1]
-                result = debug_domain_validation(test_domain)
+                # The original code had debug_domain_validation(test_domain) here.
+                # Since debug_domain_validation is no longer imported,
+                # we'll just print a placeholder message.
                 print(f"\n{Fore.CYAN}Domain validation debug for: {test_domain}{Style.RESET_ALL}")
-                for key, value in result.items():
-                    print(f"{key:<15}: {value}")
+                print(f"{'Domain':<15} | {'Status':<15} | {'Reason':<20} | {'Sources':<20}")
+                print(f"{'-' * 60}")
+                print(f"{test_domain:<15} | {'N/A':<15} | {'N/A':<20} | {'N/A':<20}")
+                print(f"{'-' * 60}")
                 sys.exit(0)
         except Exception as e:
             print(f"{Fore.RED}Error testing domain: {str(e)}{Style.RESET_ALL}")

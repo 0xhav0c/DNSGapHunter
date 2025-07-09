@@ -3,21 +3,6 @@ import os
 import datetime
 from typing import List, Dict, Tuple, Any
 
-def format_duration(seconds: int) -> str:
-    """
-    Formats duration in seconds to hours and minutes.
-    
-    Args:
-        seconds (int): Duration in seconds
-        
-    Returns:
-        str: Formatted duration string
-    """
-    td = datetime.timedelta(seconds=seconds)
-    hours = td.seconds // 3600
-    minutes = (td.seconds // 60) % 60
-    return f'{hours}h {minutes}m'
-
 def generate_html_report(results, no_dns_records, security_bypassed_count, security_blocked_count, security_block_counts, test_type, timestamp):
     """
     Generates HTML report for analysis results.
@@ -32,8 +17,9 @@ def generate_html_report(results, no_dns_records, security_bypassed_count, secur
         # If formatting fails, use original timestamp
         formatted_date = timestamp
     
-    # Calculate source statistics
+    # Calculate source statistics and count terminated domains
     source_stats = {}
+    terminated_domains_count = 0
     for domain, status, security_status, _, sources in results + no_dns_records:
         for source in sources:
             if source not in source_stats:
@@ -41,12 +27,16 @@ def generate_html_report(results, no_dns_records, security_bypassed_count, secur
                     'total': 0,
                     'bypassed': 0,
                     'blocked': 0,
-                    'no_dns': 0
+                    'no_dns': 0,
+                    'terminated': 0
                 }
             source_stats[source]['total'] += 1
             
             if status == 'valid':
-                if security_status == 'DNSFW Bypassed' or security_status == 'Sinkhole Bypassed':
+                if security_status == 'Post-Attack Terminated Domain':
+                    source_stats[source]['terminated'] += 1
+                    terminated_domains_count += 1
+                elif security_status == 'DNSFW Bypassed' or security_status == 'Sinkhole Bypassed':
                     source_stats[source]['bypassed'] += 1
                 elif security_status == 'DNSFW Blocked' or security_status == 'Sinkhole Address Blocked':
                     source_stats[source]['blocked'] += 1
@@ -321,6 +311,10 @@ def generate_html_report(results, no_dns_records, security_bypassed_count, secur
                         <h3>No DNS Record</h3>
                         <p>{len(no_dns_records)}</p>
                     </div>
+                    <div class="stat-box">
+                        <h3>Terminated Domains</h3>
+                        <p>{terminated_domains_count}</p>
+                    </div>
                 </div>
             </div>
             
@@ -347,6 +341,7 @@ def generate_html_report(results, no_dns_records, security_bypassed_count, secur
                         <th>Total Domains</th>
                         <th>Bypassed</th>
                         <th>Blocked</th>
+                        <th>Terminated</th>
                         <th>No DNS Record</th>
                     </tr>
     """
@@ -358,6 +353,7 @@ def generate_html_report(results, no_dns_records, security_bypassed_count, secur
                         <td><span class="badge badge-warning">{stats['total']}</span></td>
                         <td><span class="badge badge-success">{stats['bypassed']}</span></td>
                         <td><span class="badge badge-danger">{stats['blocked']}</span></td>
+                        <td><span class="badge badge-warning">{stats['terminated']}</span></td>
                         <td><span class="badge badge-warning">{stats['no_dns']}</span></td>
                     </tr>
         """
@@ -395,12 +391,12 @@ def generate_html_report(results, no_dns_records, security_bypassed_count, secur
                 window.domainChart = new Chart(domainCtx, {
                     type: 'pie',
                     data: {
-                        labels: ['Valid for Analysis', 'No DNS Record'],
+                        labels: ['Valid for Analysis', 'No DNS Record', 'Terminated Domains'],
                         datasets: [{
                             data: ["""
-    html_content += f"{len(results)}, {len(no_dns_records)}"
+    html_content += f"{len(results)}, {len(no_dns_records)}, {terminated_domains_count}"
     html_content += """],
-                            backgroundColor: ['#2ecc71', '#e74c3c'],
+                            backgroundColor: ['#2ecc71', '#e74c3c', '#f39c12'],
                             borderWidth: 1
                         }]
                     },
@@ -521,7 +517,7 @@ def generate_html_report(results, no_dns_records, security_bypassed_count, secur
     
     stats_js = []
     for source, stats in source_stats.items():
-        stats_js.append(f"'{source}': {{total: {stats['total']}, bypassed: {stats['bypassed']}, blocked: {stats['blocked']}, no_dns: {stats['no_dns']}}}")
+        stats_js.append(f"'{source}': {{total: {stats['total']}, bypassed: {stats['bypassed']}, blocked: {stats['blocked']}, no_dns: {stats['no_dns']}, terminated: {stats['terminated']}}}")
     
     html_content += ", ".join(stats_js)
     
@@ -532,7 +528,8 @@ def generate_html_report(results, no_dns_records, security_bypassed_count, secur
                                             `${label}: ${value} (${percentage}%)`,
                                             `Bypassed: ${sourceStats.bypassed}`,
                                             `Blocked: ${sourceStats.blocked}`,
-                                            `No DNS Record: ${sourceStats.no_dns}`
+                                            `No DNS Record: ${sourceStats.no_dns}`,
+                                            `Terminated: ${sourceStats.terminated}`
                                         ];
                                     }
                                 }

@@ -13,7 +13,7 @@ from typing import List, Dict, Tuple, Any
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 
-from domain_utils import extract_domain_from_url, is_valid_domain, get_filter_reason, is_valid_ip
+from domain_utils import extract_domain_from_url, is_valid_domain, get_filter_reason, is_valid_ip, clean_domain
 from config import HTTP_TIMEOUT, HTTP_MAX_RETRIES, HTTP_BACKOFF_FACTOR, HTTP_RETRY_CODES, WHITELISTED_DOMAINS
 
 # Add URLScan specific settings
@@ -64,20 +64,6 @@ def get_intelligence_sources() -> Dict[str, Dict[str, Any]]:
             "url": "https://www.stopforumspam.com/downloads/toxic_domains_whole.txt",
             "format": "domain",
             "description": "Toxicological domains associated with spammers",
-            "enabled": True
-        },
-        # URLScan rate limiting fixed with backoff mechanism
-        "URLScan": {
-            "url": "https://urlscan.io/api/v1/search/?q=task.tags:malicious&size=1000",
-            "format": "urlscan",
-            "description": "Malicious domains detected by URLScan.io",
-            "enabled": True,
-            "use_special_handler": True  # Flag to use special handling for this source
-        },
-        "PhishStats": {
-            "url": "https://phishstats.info/phish_score.csv",
-            "format": "phishstats",
-            "description": "Phishing sites collected by PhishStats",
             "enabled": True
         },
         # More reliable new sources
@@ -146,82 +132,6 @@ def create_resilient_session() -> requests.Session:
     
     return session
 
-# Add a special handler for URLScan to avoid rate limiting
-def fetch_urlscan_data(url: str, session: requests.Session) -> str:
-    """
-    Special handler for URLScan API to avoid rate limiting.
-    Implements additional delays and retry logic.
-    
-    Args:
-        url (str): URLScan API URL
-        session (requests.Session): Existing session object
-        
-    Returns:
-        str: Response content or empty string on failure
-    """
-    max_retries = URLSCAN_MAX_RETRIES
-    retry_count = 0
-    
-    while retry_count <= max_retries:
-        try:
-            # Add significant delay between requests to respect rate limits
-            if retry_count > 0:
-                # Exponential backoff
-                sleep_time = URLSCAN_RETRY_DELAY * (2 ** (retry_count - 1))
-                logging.info(f"URLScan API retry {retry_count}/{max_retries}. Waiting {sleep_time} seconds...")
-                time.sleep(sleep_time)
-            
-            # Make the request with extended timeout
-            response = session.get(url, timeout=URLSCAN_TIMEOUT)
-            
-            # Check if we hit rate limit
-            if response.status_code == 429:
-                retry_count += 1
-                continue
-                
-            response.raise_for_status()
-            return response.text
-            
-        except requests.exceptions.RequestException as e:
-            if "429" in str(e) and retry_count < max_retries:
-                retry_count += 1
-                continue
-            else:
-                logging.error(f"Error fetching URLScan data: {str(e)}")
-                return ""
-    
-    logging.error(f"Max retries exceeded for URLScan API")
-    return ""
-
-def clean_domain_entry(domain_entry: str) -> str:
-    """
-    Cleans a domain entry by removing comments and whitespace.
-    
-    Args:
-        domain_entry (str): Raw domain entry possibly containing comments
-    
-    Returns:
-        str: Cleaned domain entry
-    """
-    # Remove comments (# and anything after it)
-    if '#' in domain_entry:
-        domain_entry = domain_entry.split('#')[0]
-    
-    # Remove any leading/trailing whitespace
-    domain_entry = domain_entry.strip()
-    
-    # Handle other common patterns
-    if domain_entry.startswith('0.0.0.0 '):
-        domain_entry = domain_entry.replace('0.0.0.0 ', '')
-    elif domain_entry.startswith('127.0.0.1 '):
-        domain_entry = domain_entry.replace('127.0.0.1 ', '')
-    
-    # Remove trailing backslashes that shouldn't be part of domain names
-    if domain_entry.endswith('\\'):
-        domain_entry = domain_entry[:-1]
-    
-    return domain_entry
-
 def process_url_format(content: str) -> List[str]:
     """
     Process data in URL format (one URL per line).
@@ -240,7 +150,7 @@ def process_url_format(content: str) -> List[str]:
             continue
         
         # Check each line, could be URL or domain
-        cleaned_line = clean_domain_entry(line)
+        cleaned_line = clean_domain(line)
         if not cleaned_line:
             continue
         
@@ -249,15 +159,10 @@ def process_url_format(content: str) -> List[str]:
             domain = extract_domain_from_url(cleaned_line)
             if domain and is_valid_domain(domain):
                 domains.append(domain)
-        # Is it in IP and domain format? (IP domain)
-        elif ' ' in cleaned_line and is_valid_ip(cleaned_line.split(' ')[0]):
-            domain_part = cleaned_line.split(' ')[1].strip()
-            if is_valid_domain(domain_part):
-                domains.append(domain_part)
-        # Direct domain
-        elif is_valid_domain(cleaned_line):
+        else:
+            # Common format variations have been handled by clean_domain
             domains.append(cleaned_line)
-    
+            
     return domains
 
 def process_domain_format(content: str) -> List[str]:
@@ -277,7 +182,7 @@ def process_domain_format(content: str) -> List[str]:
             continue
             
         # Clean the domain entry
-        domain = clean_domain_entry(line)
+        domain = clean_domain(line)
         
         # Add if not empty
         if domain:
@@ -301,169 +206,26 @@ def process_hostfile_format(content: str) -> List[str]:
         if not line.strip() or line.strip().startswith('#'):
             continue
             
-        # Clean line from comments
-        cleaned_line = clean_domain_entry(line)
+        # Split line into parts (IP and domain)
+        parts = line.strip().split()
         
-        if not cleaned_line:
-            continue
-        
-        # Process lines with IP addresses followed by domain
-        parts = cleaned_line.strip().split()
-        
-        # Get the last part as domain (after IP address)
+        # Get domain part (last part after IP)
         if len(parts) >= 2:
-            domains.append(parts[-1].strip())
+            # Get the last part as domain
+            domain = parts[-1].strip()
             
-    return domains
-
-def process_special_format(content: str) -> List[str]:
-    """
-    Process data in special format cases (like MalwarePatrol).
-    
-    Args:
-        content (str): Raw content
-    
-    Returns:
-        List[str]: List of processed domain strings
-    """
-    domains = []
-    
-    # Check each line for URL or domain
-    for line in content.split('\n'):
-        # Skip if line is empty or starts with comment
-        if not line.strip() or line.strip().startswith('#'):
-            continue
+            # Clean the domain
+            domain = clean_domain(domain)
             
-        # Clean line from comments
-        cleaned_line = clean_domain_entry(line)
-        
-        if not cleaned_line:
-            continue
-        
-        # Is it a URL format?
-        if "://" in cleaned_line:
-            domain = extract_domain_from_url(cleaned_line)
+            # Add if not empty and valid
             if domain:
                 domains.append(domain)
-        # Is it in IP and domain format? (IP domain)
-        elif len(cleaned_line.split()) >= 2:
-            try:
-                ip_part = cleaned_line.split()[0]
-                domain_part = cleaned_line.split()[-1]
-                
-                # Clean domain part further to handle edge cases like trailing backslashes
-                domain_part = clean_domain_entry(domain_part)
-                
-                # Validate if first part is an IP
-                if is_valid_ip(ip_part):
-                    domains.append(domain_part)
-                else:
-                    # If not an IP, treat as domain directly
-                    if is_valid_domain(cleaned_line):
-                        domains.append(cleaned_line)
-            except Exception as e:
-                logging.debug(f"Error in process_special_format: {str(e)} for line: {cleaned_line}")
-                # If IP validation fails, just try to use as domain
-                if is_valid_domain(cleaned_line):
-                    domains.append(cleaned_line)
-        # Direct domain?
-        else:
-            if is_valid_domain(cleaned_line):
-                domains.append(cleaned_line)
-                
-    return domains
-
-def process_blocklist_format(content: str) -> List[str]:
-    """
-    Process data in blocklist.site format.
-    
-    Args:
-        content (str): Raw blocklist content
-    
-    Returns:
-        List[str]: List of processed domain strings
-    """
-    domains = []
-    for line in content.split('\n'):
-        # Skip if line is empty or starts with comment
-        if not line.strip() or line.strip().startswith('#'):
-            continue
             
-        # Clean the entry
-        cleaned_line = clean_domain_entry(line)
-        
-        if not cleaned_line or "." not in cleaned_line:
-            continue
-            
-        # Common format variations have been handled by clean_domain_entry
-        domains.append(cleaned_line)
-            
-    return domains
-
-def process_urlscan_format(content: str) -> List[str]:
-    """
-    Process data in URLScan.io API format.
-    
-    Args:
-        content (str): Raw URLScan API JSON content
-    
-    Returns:
-        List[str]: List of processed domain strings
-    """
-    domains = []
-    
-    # Return empty list if content is empty
-    if not content:
-        return domains
-        
-    try:
-        data = json.loads(content)
-        results = data.get("results", [])
-        
-        for result in results:
-            page = result.get("page", {})
-            domain = page.get("domain")
-            if domain:
-                domains.append(domain)
-    except (json.JSONDecodeError, AttributeError) as e:
-        logging.error(f"URLScan format parsing error: {str(e)}")
-    
-    return domains
-
-def process_phishstats_format(content: str) -> List[str]:
-    """
-    Process data in PhishStats CSV format.
-    
-    Args:
-        content (str): Raw CSV content
-    
-    Returns:
-        List[str]: List of processed domain strings
-    """
-    domains = []
-    
-    # Process CSV lines
-    lines = content.splitlines()
-    if len(lines) > 1:  # Skip header row
-        for i, line in enumerate(lines):
-            if i == 0:  # Header row
-                continue
-                
-            # Parse CSV row
-            parts = line.split(',')
-            if len(parts) >= 2:
-                url = parts[1].strip('"').strip()
-                
-                # Extract domain from URL
-                domain = extract_domain_from_url(url)
-                if domain and is_valid_domain(domain):
-                    domains.append(domain)
-    
     return domains
 
 def process_csv_format(content: str) -> List[str]:
     """
-    Process CSV format data (specifically for URLhaus).
+    Process data in CSV format.
     
     Args:
         content (str): Raw CSV content
@@ -568,31 +330,30 @@ def process_archive_format(content: bytes, url: str) -> List[str]:
                 
         elif url.endswith('.zip'):
             with zipfile.ZipFile(content_stream) as zip_file:
-                # İlerleme göstergesi için dosya sayısı
+                # File count for progress indicator
                 info_list = zip_file.infolist()
                 print(f"\r\t{Fore.YELLOW}✓ Extracting {len(info_list)} files from archive...{Style.RESET_ALL}", flush=True)
                 
-                # En fazla birkaç dosyayı işle, tümünü işleme
+                # Process only a few files, not all of them
                 processed_files = 0
                 for info in info_list:
-                    if info.is_dir() or info.file_size > 10 * 1024 * 1024:  # 10MB'den büyük dosyaları atla
+                    if info.is_dir() or info.file_size > 10 * 1024 * 1024:  # Skip files larger than 10MB
                         continue
                         
+                    # Process domains line by line
                     with zip_file.open(info) as f:
-                        content_str = f.read().decode('utf-8', errors='ignore')
-                        # Satır satır işleyerek domain ara
-                        for line in content_str.split('\n'):
-                            line = line.strip()
-                            if line and not line.startswith('#') and '.' in line:
-                                domains.append(line)
+                        for line in f:
+                            domain = extract_domain_from_url(line.strip().decode('utf-8', errors='ignore'))
+                            if domain:
+                                domains.append(domain)
+                                
+                    processed_files += 1
+                    if processed_files % 10 == 0:
+                        print(f"\r\t{Fore.YELLOW}✓ Processed {processed_files}/{len(info_list)} files, found {len(domains)} domains...{Style.RESET_ALL}", end='', flush=True)
                         
-                        processed_files += 1
-                        if processed_files % 10 == 0:
-                            print(f"\r\t{Fore.YELLOW}✓ Processed {processed_files}/{len(info_list)} files, found {len(domains)} domains...{Style.RESET_ALL}", end='', flush=True)
-                        
-                        # Max 100 dosya işle
-                        if processed_files >= 100:
-                            break
+                    # Process max 100 files
+                    if processed_files >= 100:
+                        break
                 
                 print(f"\r\t{Fore.GREEN}✓ Archive processing complete. Found {len(domains)} domains.{Style.RESET_ALL}", flush=True)
     
@@ -603,105 +364,69 @@ def process_archive_format(content: bytes, url: str) -> List[str]:
 
 def fetch_domain_list(source_name: str, source_info: Dict[str, Any]) -> Tuple[Dict[str, List[str]], int]:
     """
-    Fetches domain list from a single source with improved reliability.
+    Fetches domain list from a specific source.
     
     Args:
-        source_name (str): Name of the intelligence source
-        source_info (Dict[str, Any]): Source metadata including URL and format
+        source_name (str): Name of the source
+        source_info (Dict[str, Any]): Source metadata
         
     Returns:
-        Tuple[Dict[str, List[str]], int]: Tuple containing domains dictionary and count
+        Tuple[Dict[str, List[str]], int]: Dictionary mapping domains to their sources and count of domains
     """
-    domains: Dict[str, List[str]] = {}
-    domain_count = 0
-    comment_count = 0  # Track how many entries had comments
-    
-    if not source_info.get("enabled", True):
-        notes = source_info.get("notes", "")
-        note_text = f" ({notes})" if notes else ""
-        print(f"{source_name:<15} {Fore.YELLOW}⊘ Disabled{note_text}{Style.RESET_ALL}")
-        return domains, domain_count
-        
     url = source_info.get("url", "")
-    data_format = source_info.get("format", "url")
+    data_format = source_info.get("format", "")
     use_special_handler = source_info.get("use_special_handler", False)
     
+    if not url or not data_format:
+        return {}, 0
+    
+    session = create_resilient_session()
+    raw_domains = []
+    
     try:
-        # Display source name only without spinner
-        print(f"{source_name:<15}", end='', flush=True)
-        
-        # Create a session with retry logic
-        session = create_resilient_session()
-        
         # Handle URLScan specially to avoid rate limiting
         if use_special_handler and source_name == "URLScan":
-            content = fetch_urlscan_data(url, session)
+            print(f"{Fore.YELLOW}⊘ URLScan disabled{Style.RESET_ALL}")
+            pass # Removed URLScan specific handling
         elif data_format == "archive":
             # Binary mode for archives
-            response = session.get(url, stream=True, verify=False)
+            response = session.get(url, stream=True)
             response.raise_for_status()
-            content = response.content  # Binary mode
+            raw_domains = process_archive_format(response.content, url)
         else:
-            # Normal text mode download
-            response = session.get(url, stream=True, verify=False)
+            # Text mode for other formats
+            response = session.get(url)
             response.raise_for_status()
             content = response.text
-        
-        # Process based on format
-        raw_domains = []
-        if data_format == "url":
-            raw_domains = process_url_format(content)
-        elif data_format == "domain":
-            raw_domains = process_domain_format(content)
-        elif data_format == "hostfile":
-            raw_domains = process_hostfile_format(content)
-        elif data_format == "special":
-            raw_domains = process_special_format(content)
-        elif data_format == "blocklist":
-            raw_domains = process_blocklist_format(content)
-        elif data_format == "urlscan":
-            raw_domains = process_urlscan_format(content)
-        elif data_format == "phishstats":
-            raw_domains = process_phishstats_format(content)
-        elif data_format == "csv":
-            raw_domains = process_csv_format(content)
-        elif data_format == "archive":
-            raw_domains = process_archive_format(content, url)
             
-        # Extract domains from URLs or process raw domains
-        processed_count = 0
-        for item in raw_domains:
-            if item:
-                # Check if this item had a comment that was cleaned
-                if '#' in item:
-                    comment_count += 1
-                    item = clean_domain_entry(item)  # Clean again just to be sure
+            # Process according to format
+            if data_format == "url":
+                raw_domains = process_url_format(content)
+            elif data_format == "domain":
+                raw_domains = process_domain_format(content)
+            elif data_format == "hostfile":
+                raw_domains = process_hostfile_format(content)
+            elif data_format == "csv":
+                raw_domains = process_csv_format(content)
+            else:
+                logging.error(f"Unknown format: {data_format}")
+                return {}, 0
                 
-                if data_format == "url":
-                    domain = extract_domain_from_url(item)
-                else:
-                    domain = item.lower()
-                
-                if domain:
-                    if domain not in domains:
-                        domains[domain] = []
-                    domains[domain].append(source_name)
-                    domain_count += 1
-        
-        # Display completion with domain count and comment info
-        comment_info = f" (cleaned {comment_count} comments)" if comment_count > 0 else ""
-        print(f"{Fore.GREEN}✓ {domain_count} domains{comment_info}{Style.RESET_ALL}")
-            
-    except requests.exceptions.HTTPError as e:
-        print(f"{Fore.RED}✗ HTTP Error: {e.response.status_code}{Style.RESET_ALL}")
-    except requests.exceptions.Timeout:
-        print(f"{Fore.RED}✗ Request Timeout{Style.RESET_ALL}")
     except requests.exceptions.RequestException as e:
-        print(f"{Fore.RED}✗ {str(e)}{Style.RESET_ALL}")
+        logging.error(f"Error fetching {source_name}: {str(e)}")
+        return {}, 0
     except Exception as e:
-        print(f"{Fore.RED}✗ {str(e)}{Style.RESET_ALL}")
+        logging.error(f"Unexpected error processing {source_name}: {str(e)}")
+        return {}, 0
+        
+    # Process domains and track sources
+    domain_sources = {}
+    for domain in raw_domains:
+        if domain not in domain_sources:
+            domain_sources[domain] = []
+        domain_sources[domain].append(source_name)
     
-    return domains, domain_count
+    return domain_sources, len(raw_domains)
 
 def merge_domain_lists(domain_lists: List[Dict[str, List[str]]]) -> Dict[str, List[str]]:
     """
@@ -766,8 +491,6 @@ def fetch_malicious_domains(terminal_width: int) -> Tuple[Dict[str, List[str]], 
     Returns:
         Tuple[Dict[str, List[str]], Dict[str, List[str]]]: Tuple containing valid domains and filtered domains
     """
-    print(f"\n{Fore.YELLOW}Collecting Malicious Domain Lists:{Style.RESET_ALL}\n")
-    
     intelligence_sources = get_intelligence_sources()
     
     # Get only active sources
@@ -777,19 +500,8 @@ def fetch_malicious_domains(terminal_width: int) -> Tuple[Dict[str, List[str]], 
     # Show user which sources will be used
     source_count = len(active_sources)
     
-    print(f"{Fore.CYAN}Total {source_count} active sources detected{Style.RESET_ALL}")
-    print(f"{'-' * terminal_width}")
-    print(f"{'Source':<15} | {'Type':<10} | {'Description':<50}")
-    print(f"{'-' * terminal_width}")
-    
-    # Only show active sources
-    for source_name, source_info in active_sources.items():
-        print(f"{source_name:<15} | {source_info.get('format', 'url'):<10} | {source_info.get('description', ''):<50}")
-    
-    print(f"{'-' * terminal_width}\n")
-    
-    # Progress message
-    print(f"{Fore.CYAN}Starting data collection from {source_count} active sources...{Style.RESET_ALL}\n")
+    logging.info(f"{Fore.CYAN}[PHASE] DATA COLLECTION{Style.RESET_ALL}")
+    logging.info(f"Starting data collection from {source_count} active sources")
     
     domain_lists = []
     total_domains_before_dedup = 0
@@ -799,8 +511,9 @@ def fetch_malicious_domains(terminal_width: int) -> Tuple[Dict[str, List[str]], 
         domains, count = fetch_domain_list(source_name, source_info)
         domain_lists.append(domains)
         total_domains_before_dedup += count
+        logging.info(f"Collected {count} domains from {source_name} ({source_info.get('description', '')})")
     
-    print(f"\n{Fore.CYAN}Collection completed: {total_domains_before_dedup} total domains from {source_count} sources{Style.RESET_ALL}")
+    logging.info(f"Collection completed: {total_domains_before_dedup} total domains from {source_count} sources")
     
     # Merge all domain lists
     all_domains = merge_domain_lists(domain_lists)
@@ -818,17 +531,12 @@ def fetch_malicious_domains(terminal_width: int) -> Tuple[Dict[str, List[str]], 
     total_domains_after_dedup = len(valid_domains) + len(filtered_domains)
     duplicate_count = total_domains_before_dedup - total_domains_after_dedup
     
-    print(f"\n{Fore.YELLOW}Domain Analysis:{Style.RESET_ALL}")
-    print(f"{'-' * terminal_width}")
-    print(f"{'Metric':<40} | {'Count':>10}")
-    print(f"{'-' * terminal_width}")
-    print(f"{'Total Domains (Including Duplicates)':<40} | {total_domains_before_dedup:>10}")
-    print(f"{'Duplicate Domains':<40} | {Fore.RED}{duplicate_count:>10}{Style.RESET_ALL}")
-    print(f"{'Valid Domains':<40} | {Fore.GREEN}{len(valid_domains):>10}{Style.RESET_ALL}")
-    print(f"{'Filtered Domains':<40} | {len(filtered_domains):>10}")
-    print(f"{'-' * terminal_width}")
+    logging.info(f"{Fore.CYAN}[PHASE] DOMAIN ANALYSIS{Style.RESET_ALL}")
+    logging.info(f"Total Domains (Including Duplicates): {total_domains_before_dedup}")
+    logging.info(f"Duplicate Domains: {duplicate_count}")
+    logging.info(f"Valid Domains: {len(valid_domains) + len(filtered_domains)}")
     
-    # Print filter reasons statistics
+    # Calculate and log filter reasons
     filter_reasons = {}
     for domain in filtered_domains:
         reason = get_filter_reason(domain)
@@ -836,26 +544,18 @@ def fetch_malicious_domains(terminal_width: int) -> Tuple[Dict[str, List[str]], 
             filter_reasons[reason] = 0
         filter_reasons[reason] += 1
     
+    logging.info(f"{Fore.CYAN}[PHASE] FILTERING STATISTICS{Style.RESET_ALL}")
+    # Print filter reasons as logs
     if filter_reasons:
-        print(f"\n{Fore.YELLOW}Filter Reasons:{Style.RESET_ALL}")
-        print(f"{'-' * terminal_width}")
-        print(f"{'Reason':<40} | {'Count':>10}")
-        print(f"{'-' * terminal_width}")
         for reason, count in filter_reasons.items():
-            print(f"{reason:<40} | {count:>10}")
-        print(f"{'-' * terminal_width}")
+            logging.info(f"Filter Reason - {reason}: {count} domains")
     
     if not valid_domains:
         logging.error("No valid domains found. Terminating execution.")
         print(f"\n{Fore.RED}No valid domains found! Please check your internet connection and source URLs.{Style.RESET_ALL}")
         sys.exit(1)
     
-    # Domain counts by source
-    print(f"\n{Fore.YELLOW}Domain Counts by Source:{Style.RESET_ALL}")
-    print(f"{'-' * terminal_width}")
-    print(f"{'Source':<20} | {'Valid':<10} | {'Filtered':<10} | {'Total':>10}")
-    print(f"{'-' * terminal_width}")
-    
+    logging.info(f"{Fore.CYAN}[PHASE] SOURCE STATISTICS{Style.RESET_ALL}")
     source_stats = {}
     for domain, sources in valid_domains.items():
         for source in sources:
@@ -871,9 +571,8 @@ def fetch_malicious_domains(terminal_width: int) -> Tuple[Dict[str, List[str]], 
     
     for source, stats in sorted(source_stats.items()):
         total = stats["valid"] + stats["filtered"]
-        print(f"{source:<20} | {stats['valid']:<10} | {stats['filtered']:<10} | {total:>10}")
+        logging.info(f"Source {source}: Valid={stats['valid']}, Filtered={stats['filtered']}, Total={total}")
     
-    print(f"{'-' * terminal_width}")
-    
+    logging.info(f"{Fore.CYAN}[PHASE] STARTING ANALYSIS{Style.RESET_ALL}")
     logging.info(f"Starting analysis with {len(valid_domains)} domains.")
     return valid_domains, filtered_domains 
