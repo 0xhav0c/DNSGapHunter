@@ -16,7 +16,7 @@ A comprehensive tool designed to test the effectiveness of DNS security solution
 1. Install Python 3.8 or higher
 2. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/DNSGapHunter.git
+git clone https://github.com/0xhav0c/DNSGapHunter.git
 cd DNSGapHunter
 ```
 
